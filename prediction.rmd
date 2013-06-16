@@ -1,0 +1,190 @@
+Titanic dataset - Predict survivors
+========================================================
+
+Data Set Information:
+for each person in the training set, the following attributes are provided: survived,pclass,name,sex,age,sibsp,parch,ticket,fare,cabin,embarked.
+
+load data:
+```{r}
+titanic.train.raw <- read.csv("train.csv")
+```
+save the original dataframe
+```{r}
+orig.df <- titanic.train.raw
+```
+
+first look at dataset:
+```{r}
+nrow(titanic.train.raw) # records
+ncol(titanic.train.raw) # columns
+ns <- names(titanic.train.raw) # save names into a variable
+ns
+head(titanic.train.raw)
+summary(titanic.train.raw)
+```
+types of columns?
+```{r}
+sapply(titanic.train.raw, class)
+```
+how many survived? how many died?
+```{r}
+sum(subset(titanic.train.raw, select=c("survived")))
+nrow(subset(titanic.train.raw, subset=(survived==1)))
+nrow(subset(titanic.train.raw, subset=(survived==0)))
+```
+attributes survived, pclass should be converted to factor
+name should be converted to string/character
+ticket does not seem to have much meaning (at least I don't see any); cabin could be useful in the prediction if we could identify location on ship (starboard, port, bow, back; deck), but this information is not readily available in the dataset; anyway most of cabin information is missing.
+
+let's see correlations (numeric values)
+```{r}
+cor(titanic.train.raw[,c("survived", "pclass", "parch", "sibsp", "fare")])
+```
+
+let's make some groupings
+```{r}
+table(titanic.train.raw$survived, titanic.train.raw$sex)
+table(titanic.train.raw$survived, titanic.train.raw$pclass)
+table(titanic.train.raw$survived, titanic.train.raw$embarked)
+table(titanic.train.raw$pclass, titanic.train.raw$embarked)
+table(titanic.train.raw$pclass, titanic.train.raw$sex)
+table(titanic.train.raw$sex, titanic.train.raw$embarked)
+```
+
+let's make some plots, colour by survived column
+```{r fig.width=7, fig.height=6}
+library(ggplot2)
+qplot(jitter(pclass),sex,data=titanic.train.raw, col=as.factor(survived), xlab="class", ylab="gender")
+qplot(age,sex,data=titanic.train.raw, col=as.factor(survived), xlab="age", ylab="gender")
+qplot(age,jitter(pclass),data=titanic.train.raw, col=as.factor(survived), xlab="age", ylab="class")
+qplot(jitter(pclass),embarked,data=titanic.train.raw, col=as.factor(survived), xlab="class", ylab="embarked")
+qplot(fare,embarked,data=titanic.train.raw, col=as.factor(survived), xlab="fare", ylab="embarked")
+qplot(age,jitter(sibsp),data=titanic.train.raw, col=as.factor(survived), xlab="age", ylab="siblings")
+qplot(jitter(sibsp),sex,data=titanic.train.raw, col=as.factor(survived), ylab="gender", xlab="siblings")
+```
+
+clean up dataset, make transformations
+```{r}
+titanic.train.raw$survived <- as.factor(titanic.train.raw$survived)
+titanic.train.raw$pclass <- as.factor(titanic.train.raw$pclass)
+titanic.train.raw$name <- as.character(titanic.train.raw$name)
+titanic.train.raw[titanic.train.raw$embarked == "",c("embarked")] <- NA
+```
+
+missing data
+```{r}
+sum(!complete.cases(titanic.train.raw))
+```
+
+a lot of missing data: age
+
+split the dataset into a training set and a validation/test set,
+validation set will be approx. 10% of the data available, the rest (90%) will constitute the training set
+```{r}
+set.seed(101)
+indices <- seq_len(nrow(titanic.train.raw))
+ind1 <- sample(indices, 89)
+ind2 <- indices[!indices %in% ind1]
+testData <- titanic.train.raw[ind1,]
+trainData <- titanic.train.raw[ind2,]
+```
+
+load prediction dataset; clean it up in the same way
+```{r}
+predictionData <- read.csv("test.csv")
+predictionData$pclass <- as.factor(predictionData$pclass)
+predictionData$name <- as.character(predictionData$name)
+predictionData$embarked <- factor(predictionData$embarked, levels = levels(trainData$embarked))
+sapply(predictionData, class)
+summary(predictionData)
+```
+
+building models
+logistic regression
+```{r}
+glm1 <- glm(survived ~ pclass + sex + age + embarked + sibsp + parch + fare, family=binomial, data=trainData)
+summary(glm1)
+```
+
+drop from the model the variables that do not contribute to the prediction; drop age also (to many NA) 
+```{r}
+glm2 <- glm(survived ~ pclass + sex + sibsp, family=binomial, data=trainData)
+summary(glm2)
+# prediction on test set
+plr <- round(predict(glm2, type="response", newdata=testData))
+err_plr <- sum(testData$survived != plr) / nrow(testData)
+sum(testData$survived != plr) # number of missclassified records
+err_plr # error rate
+```
+
+decision tree
+```{r}
+library(tree)
+set.seed(101)
+tree2 <- tree(survived ~ pclass + sex + age + sibsp + fare, data=trainData)
+summary(tree2)
+# visualize tree (in text mode)
+tree2
+# plot tree
+plot(tree2)
+text(tree2)
+# prediction on test set
+pt2 <- predict(tree2,newdata=testData,type="class")
+err_pt2 <- sum(testData$survived != pt2) / nrow(testData)
+sum(testData$survived != pt2) # number of missclassified records
+err_pt2 # error rate
+```
+
+random forest
+```{r}
+library(randomForest)
+set.seed(101)
+# ommited fare and age, because of NA in the prediction/test data set
+forest2 <- randomForest(survived ~ pclass + sex + sibsp, data=trainData, ntree=501)
+forest2
+# prediction on test set
+pf2 <- predict(forest2,newdata=testData)
+err_pf2 <- sum(testData$survived != pf2) / nrow(testData)
+sum(testData$survived != pf2) # number of missclassified records
+err_pf2 # error rate
+```
+
+boosting
+```{r}
+library(ada)
+set.seed(101)
+ada3 <- ada(survived ~ pclass + sex + age + sibsp + embarked, data=trainData)
+ada3
+# prediction on test set
+pa3 <- predict(ada3,newdata=testData)
+err_pa3 <- sum(testData$survived != pa3) / nrow(testData)
+sum(testData$survived != pa3) # number of missclassified records
+err_pa3 # error rate
+```
+
+make the predictions (exemple only for random forest, the others are similar)
+```{r}
+pred_pf2 <- as.numeric(predict(forest2,newdata=predictionData)) - 1
+result_df <- data.frame(pred_pf2)
+```
+ensemble (combined model: decision tree, random forest, ada boosting)
+```{r}
+# decision tree
+pred_pt2 <- as.numeric(predict(tree2,newdata=predictionData,type="class")) - 1
+# ada boosting
+pred_pa3 <- as.numeric(predict(ada3, newdata=predictionData)) - 1
+comb1 <- rep(0,nrow(predictionData))
+for (i in 1:nrow(predictionData)) {
+  # we assume random forest is better than the other algorithms
+  comb1[i] <- if (pred_pa3[i] == pred_pt2[i]) pred_pa3[i] else pred_pf2[i]
+  # assume boosting is better than the other algorithms, then:
+  # comb1[i] <- if (pred_pf2[i] == pred_pt2[i]) pred_pf2[i] else pred_pa3[i]
+}
+result_df <- data.frame(comb1)
+```
+
+save to predictions to csv file
+```{r}
+# comment out the line
+# write.csv(result_df, file="predictionxx.csv", row.names=FALSE)
+```
